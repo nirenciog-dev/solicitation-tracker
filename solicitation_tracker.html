@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Solicitation Tracker</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .message-box {
+            transition: opacity 0.5s ease-in-out;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+    <div class="container mx-auto p-4 sm:p-6 lg:p-8 max-w-4xl">
+        <header class="text-center mb-8">
+            <h1 class="text-3xl sm:text-4xl font-bold text-gray-900">Solicitation Tracker</h1>
+            <p class="text-md text-gray-600 mt-2">Claim solicitation numbers in real-time.</p>
+        </header>
+
+        <main>
+            <div class="bg-white rounded-lg shadow-md p-6 mb-8">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label for="agentName" class="block text-sm font-medium text-gray-700 mb-1">Agent Name</label>
+                        <input type="text" id="agentName" placeholder="e.g., Jules" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                    </div>
+                    <div>
+                        <label for="solicitationNumber" class="block text-sm font-medium text-gray-700 mb-1">Solicitation #</label>
+                        <input type="text" id="solicitationNumber" placeholder="e.g., W912HQ25S0019" class="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500">
+                    </div>
+                </div>
+                <button id="trackButton" class="mt-6 w-full bg-indigo-600 text-white font-semibold py-3 px-4 rounded-md hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 ease-in-out disabled:bg-indigo-400 disabled:cursor-not-allowed">
+                    <span id="buttonText">Claim Solicitation</span>
+                    <span id="buttonSpinner" class="hidden">
+                        <svg class="animate-spin h-5 w-5 text-white mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                        </svg>
+                    </span>
+                </button>
+                <div id="messageBox" class="message-box text-center mt-4 p-3 rounded-md text-sm opacity-0"></div>
+            </div>
+
+            <div class="bg-white rounded-lg shadow-md">
+                <h2 class="text-2xl font-bold text-gray-900 p-6 border-b border-gray-200">Tracked Solicitations</h2>
+                <div id="solicitationList" class="divide-y divide-gray-200">
+                    <!-- Solicitations will be dynamically inserted here -->
+                     <p id="listLoading" class="p-6 text-center text-gray-500">Loading tracked solicitations...</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script type="module">
+        // --- Firebase SDK Imports ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, addDoc, query, where, getDocs, onSnapshot, orderBy } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Firebase Configuration ---
+        // IMPORTANT: Replace with your actual Firebase project configuration
+        const firebaseConfig = {
+            apiKey: "YOUR_API_KEY",
+            authDomain: "YOUR_AUTH_DOMAIN",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_STORAGE_BUCKET",
+            messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+            appId: "YOUR_APP_ID"
+        };
+
+        // --- DOM Element References ---
+        const agentNameInput = document.getElementById('agentName');
+        const solicitationNumberInput = document.getElementById('solicitationNumber');
+        const trackButton = document.getElementById('trackButton');
+        const messageBox = document.getElementById('messageBox');
+        const solicitationList = document.getElementById('solicitationList');
+        const listLoading = document.getElementById('listLoading');
+        const buttonText = document.getElementById('buttonText');
+        const buttonSpinner = document.getElementById('buttonSpinner');
+
+        // --- UI Helper Functions ---
+        const showMessage = (message, type) => {
+            messageBox.textContent = message;
+            messageBox.classList.remove('bg-green-100', 'text-green-800', 'bg-red-100', 'text-red-800', 'bg-yellow-100', 'text-yellow-800');
+            if (type === 'success') {
+                messageBox.classList.add('bg-green-100', 'text-green-800');
+            } else if (type === 'error') {
+                messageBox.classList.add('bg-red-100', 'text-red-800');
+            } else if (type === 'warning') {
+                messageBox.classList.add('bg-yellow-100', 'text-yellow-800');
+            }
+            messageBox.classList.remove('opacity-0');
+            setTimeout(() => {
+                messageBox.classList.add('opacity-0');
+            }, 4000);
+        };
+
+        const setLoadingState = (isLoading) => {
+            trackButton.disabled = isLoading;
+            buttonText.classList.toggle('hidden', isLoading);
+            buttonSpinner.classList.toggle('hidden', !isLoading);
+        };
+        
+        // --- App Initialization ---
+        let db;
+        try {
+            const app = initializeApp(firebaseConfig);
+            const auth = getAuth(app);
+            db = getFirestore(app);
+
+            // Sign in user anonymously to secure database access
+            await signInAnonymously(auth);
+
+        } catch (error) {
+            console.error("Firebase initialization failed:", error);
+            showMessage("Error connecting to the database. Please check your Firebase configuration.", 'error');
+            document.getElementById('trackButton').disabled = true;
+        }
+
+        // --- Firestore Logic ---
+
+        // 1. Claim a Solicitation
+        const claimSolicitation = async () => {
+            const agentName = agentNameInput.value.trim();
+            const solicitationNumber = solicitationNumberInput.value.trim().toUpperCase();
+
+            if (!agentName || !solicitationNumber) {
+                showMessage("Please enter both agent name and solicitation number.", 'warning');
+                return;
+            }
+
+            setLoadingState(true);
+
+            try {
+                // Check if the solicitation number already exists
+                const solicitationsRef = collection(db, "solicitations");
+                const q = query(solicitationsRef, where("number", "==", solicitationNumber));
+                const querySnapshot = await getDocs(q);
+
+                if (!querySnapshot.empty) {
+                    showMessage(`Sorry, solicitation #${solicitationNumber} is already taken.`, 'error');
+                } else {
+                    // If not taken, add it to the database
+                    await addDoc(solicitationsRef, {
+                        name: agentName,
+                        number: solicitationNumber,
+                        timestamp: new Date()
+                    });
+                    showMessage(`Success! You've claimed solicitation #${solicitationNumber}.`, 'success');
+                    agentNameInput.value = '';
+                    solicitationNumberInput.value = '';
+                }
+            } catch (error) {
+                console.error("Error claiming solicitation: ", error);
+                showMessage("An error occurred. Please try again.", 'error');
+            } finally {
+                setLoadingState(false);
+            }
+        };
+
+        // 2. Listen for Real-Time Updates
+        const listenForSolicitations = () => {
+             const solicitationsRef = collection(db, "solicitations");
+             const q = query(solicitationsRef, orderBy("timestamp", "desc"));
+
+             onSnapshot(q, (querySnapshot) => {
+                 listLoading.style.display = 'none';
+                 solicitationList.innerHTML = ''; // Clear previous list
+                 if (querySnapshot.empty) {
+                     solicitationList.innerHTML = `<p class="p-6 text-center text-gray-500">No solicitations have been tracked yet.</p>`;
+                 } else {
+                     querySnapshot.forEach((doc) => {
+                         const data = doc.data();
+                         const listItem = document.createElement('div');
+                         listItem.className = 'flex items-center justify-between p-4 sm:p-6 hover:bg-gray-50';
+                         listItem.innerHTML = `
+                            <div>
+                                <p class="font-semibold text-indigo-600">${data.number}</p>
+                                <p class="text-sm text-gray-500">Claimed by: ${data.name}</p>
+                            </div>
+                            <p class="text-xs text-gray-400">${data.timestamp.toDate().toLocaleString()}</p>
+                         `;
+                         solicitationList.appendChild(listItem);
+                     });
+                 }
+             }, (error) => {
+                 console.error("Error listening to solicitations:", error);
+                 listLoading.style.display = 'none';
+                 solicitationList.innerHTML = `<p class="p-6 text-center text-red-500">Could not load data. Please refresh the page.</p>`;
+             });
+        };
+
+
+        // --- Event Listeners ---
+        trackButton.addEventListener('click', claimSolicitation);
+        solicitationNumberInput.addEventListener('keypress', (e) => {
+            if(e.key === 'Enter') {
+                claimSolicitation();
+            }
+        });
+
+
+        // Start listening for live data when the app loads
+        if (db) {
+            listenForSolicitations();
+        }
+
+    </script>
+</body>
+</html>
+
